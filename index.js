@@ -14,6 +14,8 @@ const cancelIdleCallback = globalThis.cancelIdleCallback || clearTimeout;
 
 export const PHASE_IDLE = 0;
 export const PHASE_READS = 1;
+// Starts automatically with first mutation and ends in following microtask
+// or starts and ends with `dispatch`
 export const PHASE_WRITES = 2;
 
 globalThis[contextSymbol] = {
@@ -21,23 +23,15 @@ globalThis[contextSymbol] = {
   phase: PHASE_IDLE,
   level: 0,
   endWritesScheduled: false,
-  // Batch either:
-  // - Starts automatically with first mutation and ends in following microtask.
-  // - Starts and ends with `dispatch`
-  //inBatch: false,
   // `dispatch`ed actions don't run until effects or subscriptions (whatever is last) are finished
-  scheduledActions: [],
-  // TODO investigate if replacable by scheduledObservers.size check
-  // TODO batchedObservers, endBatchScheduled
-  //endBatchScheduled: false,
+  scheduledActions: [],  
   // Set<observer>
   scheduledObservers: new Set(),
   // We could probably use WeakMap for non string keys
   // Map<observable, Set<observer>>
   observersMap: new Map(),
-  // Map<observer, Set<observable>>
-  // observablesMap: new Map(), // TODO delete
-  ssr: typeof window !== 'undefined',
+  // Map<observer, Set<observable>>  
+  ssr: typeof window === 'undefined',
   requireObserver: true,
 }
 
@@ -87,7 +81,12 @@ function _isSupported(value) {
   return proto === null || proto === Object.prototype;
 }
 
+export function createStore(state = {}) {
+  return new Store(state);
+}
+
 // TODO make immutable and do not provide access to value, it's just an instruction
+// state.a = ignore(val);
 export class Ref {
   constructor(value) {
     this.value = value;
@@ -127,9 +126,7 @@ export function dispatch(action) {
   // Also we don't have to worry about new observers being concurrently scheduled when previous are still being processed.
   // We guarantee that all (either scheduled or in progress) effects are finished before dispatched action is called.  
   if (
-    context.PHASE_READS
-    /*context.observer
-    || context.scheduledObservers.size !== 0*/
+    context.PHASE_READS    
   ) {
     // Scheduled actions will be eventually called at `endReads`
     context.scheduledActions.push(action);
@@ -146,55 +143,6 @@ export function dispatch(action) {
   }
 }
 
-/*
-export function callScheduledActions() {
-  console.debug(`callScheduledActions`);
-  const context = getContext();
-  const { scheduledActions } = context;  
-  context.scheduledActions = [];
-  context.inBatch = true;
-  // microoptimization: `for of` instead of .forEach
-  for (const action of scheduledActions) {
-    callAction(action);
-  }
-  callScheduledObservers(); // ends batch
-}
-*/
-/*
-export function callAction(action) {
-  if (process.env.NODE_ENV !== 'production' && (context.observer ||  context.scheduledObservers.size !== 0)) {
-    throw new Error('Action can\'t be called from within an observer or when there are still scheduled observers.')
-  }
-  action();
-}
-*/
-/*
-// endBatch only callable at the end of PHASE_WRITES
-export function callScheduledObservers() {
-  console.debug(`callScheduledObservers`);
-  const context = getContext();
-  if (process.env.NODE_ENV !== 'production' && context.observer) {
-    throw new Error('Scheduled observers can\'t be called from within an observer.')
-  }
-  // End batch
-  context.inBatch = false;
-  context.endBatchScheduled = false;
-  if (context.scheduledObservers.size === 0) {
-    return;
-  }
-  // Note      
-  unstable_batchedUpdates(() => {
-    context.scheduledObservers.forEach(observer => {      
-      observer.effect(observer);
-      // Must be after effect!
-      context.scheduledObservers.delete(observer);
-    });
-  })  
-  // Effects could call `dispatch`
-  if (context.scheduledActions)
-  callScheduledActions();
-}
-*/
 export function beginWrites() {
   console.debug(`beginWrites`);
   const context = getContext();
@@ -268,7 +216,7 @@ export function endReads() {
     }
     context.scheduledActions = [];
   } finally {
-    context.endWritesScheduled = false;
+    context.endWritesScheduled = false; // TODO
     endWrites();
   }
 }
@@ -417,7 +365,7 @@ export function reportChange(observable) {
 
 export const StoreContext = createContext();
 
-export function Provider({ store, context = StoreContext, children }) {
+export function StoreProvider({ store, context = StoreContext, children }) {
   const value = useMemo(() => store, [store]);
   return createElement(context.Provider, { value }, children);
 }
@@ -477,7 +425,7 @@ export function observer(component) {
   const context = getContext();
   if (context.ssr) return component;
 
-  function ObserverComponent(props, refOrCtx) {
+  function ObserverComponent(props, refOrCtx) {    
     // Optimization: 
     // since we don't need state, use that slot as ref
     const [inst, forceUpdate] = useState({ observer: null });
@@ -562,7 +510,7 @@ export class Store {
   constructor(state = {}) {
     this._listenersScheduled = false;
     this._listeners = [];
-    this._dispatch = this.dispatch.bind(this);
+    this.dispatch = this.dispatch.bind(this);
     this._version = Symbol();
     if (!_isSupported(state)) {
       throw new Error('State must be either plain object or array.')
@@ -652,8 +600,7 @@ export const copyProxyHandler = {
     return Reflect.get(target, key, reciever);
   },
   ownKeys(target) {
-    const node = getNode(target);
-    console.log('ownKeys');
+    const node = getNode(target);    
     const observable = getObservable(node, keysKey);
     reportAccess(observable)
     return Reflect.ownKeys(target);

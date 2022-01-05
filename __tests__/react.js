@@ -1,9 +1,11 @@
 import { jest, expect, test } from '@jest/globals';
-import { Store, getNode, getContext, observer, useObservableStore, Provider, dispatch, unwrap } from '../index.js';
+import { Store, getNode, getContext, observer, useObservableStore, StoreProvider, dispatch, unwrap } from '../index.js';
 import Renderer from 'react-test-renderer';
 import React, { useState, createElement as el, useMemo, useEffect, useLayoutEffect } from 'react';
 import { render, fireEvent, waitFor, screen } from '@testing-library/react'
 import { OBSERVABLE_ACCESS_OUTSIDE_OBSERVER } from '../error-codes.js';
+
+getContext().ssr = false;
 
 test('observer is reactive', async () => {
   const store = new Store({ a: 0 });
@@ -18,7 +20,7 @@ test('observer is reactive', async () => {
   let renderer;
   Renderer.act(() => {
     renderer =Renderer.create(
-      el(Provider, { store },
+      el(StoreProvider, { store },
         el(Test),
       ),
     );
@@ -58,7 +60,7 @@ test('observer ignores deep mutations', async () => {
   let renderer;
   Renderer.act(() => {
     renderer = Renderer.create(
-      el(Provider, { store },
+      el(StoreProvider, { store },
         el(Test),
       ),
     );
@@ -96,7 +98,7 @@ test('observer memo treats copies of the same object as identical', async () => 
   let renderer;
   Renderer.act(() => {
     renderer = Renderer.create(
-      el(Provider, { store },
+      el(StoreProvider, { store },
         el(Parent),
       ),
     );
@@ -139,7 +141,7 @@ test('useMemo works with observable deps', async () => {
   let renderer;
   Renderer.act(() => {
     renderer = Renderer.create(
-      el(Provider, { store },
+      el(StoreProvider, { store },
         el(Test),
       ),
     );
@@ -179,7 +181,7 @@ test('accessing observables in non-observer throws', async () => {
   let renderer;
   Renderer.act(() => {
     renderer = Renderer.create(
-      el(Provider, { store },
+      el(StoreProvider, { store },
         el(Parent),
       ),
     );
@@ -216,7 +218,7 @@ test('use(layout)Effect throws when acessing observables', async () => {
   let renderer;
   Renderer.act(() => {
     renderer = Renderer.create(
-      el(Provider, { store },
+      el(StoreProvider, { store },
         el(Test),
       ),
     );
@@ -242,7 +244,7 @@ test('unwrap subscribes for deep mutations', async () => {
   let renderer;
   Renderer.act(() => {
     renderer = Renderer.create(
-      el(Provider, { store },
+      el(StoreProvider, { store },
         el(Test),
       ),
     );
