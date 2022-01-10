@@ -2,6 +2,8 @@ import { Component, createContext, createElement, memo, useContext, useEffect, u
 import { unstable_batchedUpdates } from 'react-dom';
 import { OBSERVABLE_ACCESS_OUTSIDE_OBSERVER } from "./error-codes.js";
 
+const __DEV__ = process.env.NODE_ENV;
+
 let storeId = 0;
 const nodeSymbol = Symbol('node');
 const contextSymbol = Symbol('context');
@@ -24,7 +26,7 @@ globalThis[contextSymbol] = {
   level: 0,
   endWritesScheduled: false,
   // `dispatch`ed actions don't run until effects or subscriptions (whatever is last) are finished
-  scheduledActions: [],  
+  scheduledActions: [],
   // Set<observer>
   scheduledObservers: new Set(),
   // We could probably use WeakMap for non string keys
@@ -46,7 +48,10 @@ class Observer {
     this.observables = new Set();
     this.newObservables = null;
     this.effect = effect;
-    this.disposeCallbackId = null;
+    // TODO Subclass - ComponentObserver
+    this.disposeCallbackId = null;    
+    this.prevProps = null;
+    this.propsProxy = null;
   }
   scheduleDispose() {
     this.disposeCallbackId = requestIdleCallback(() => this.dispose());
@@ -102,17 +107,17 @@ export class Ref {
 export function dispatch(action) {
   console.debug(`dispatch`, action);
   const context = getContext();
-  if (process.env.NODE_ENV !== 'production' && (context.phase === PHASE_WRITES)) {
+  if (__DEV__ && context.phase === PHASE_WRITES) {
     // Simplifies impl and avoids confusion:
     // Can't nest dispatch calls - should we batch these together, should they wait for observers?
     // Can't mix dispatch batch boundary (synchronous), with microtask batch boundary (asynchronous), eg:
     // `state.a = 1; dispatch(); state.b = 2`
-    // It's not clear whether `dispatch` should `callScheduledObservers`
+    // It's not clear whether `dispatch` should call scheduled observers
     // immediately at it's end (observers possibly see incomplete changes - inconsitencies)
     // or in microtask (causing issues with observers that must run synchronously)
-    // Atm can guarantee the dispatch always calls `callScheduledObservers`
+    // Atm can guarantee the dispatch always calls scheduled observers at it's end
     throw new Error(
-      `Can't call dispatch when already in writes phase.
+      `Can't call \`dispatch\` when already in writes phase.
       Make sure you don't nest \`dispatch\` calls and all your state mutations
       are part of a single \`dispatch\` call.
       `
@@ -126,7 +131,7 @@ export function dispatch(action) {
   // Also we don't have to worry about new observers being concurrently scheduled when previous are still being processed.
   // We guarantee that all (either scheduled or in progress) effects are finished before dispatched action is called.  
   if (
-    context.PHASE_READS    
+    context.PHASE_READS
   ) {
     // Scheduled actions will be eventually called at `endReads`
     context.scheduledActions.push(action);
@@ -298,12 +303,12 @@ export function getObservable(node, key) {
 
 export function unwrap(copyProxy) {
   const node = getNode(copyProxy);
-  if (process.env.NODE_ENV !== 'production' && !node) {
+  if (__DEV__ && !node) {    
     throw new Error(`unwrap argument must be snapshot proxy`)
   }
   const observable = getObservable(node, subtreeKey);
   reportAccess(observable);
-  // TODO ideally we should deep freeze the copy on devel
+  // TODO ideally we should deep freeze the copy on devel  
   return copyProxy[proxyTargetSymbol];
 }
 
@@ -323,7 +328,7 @@ export function reportAccess(observable) {
     throw new Error(`${OBSERVABLE_ACCESS_OUTSIDE_OBSERVER}: '${String(observable)}' was accessed outside observer. TODO explain what to do`);
   }
 
-  if (process.env.NODE_ENV !== 'production' && context.phase !== PHASE_READS) {    
+  if (process.env.NODE_ENV !== 'production' && context.phase !== PHASE_READS) {
     throw new Error("Can't report access outside reads phase.");
   }
   //console.debug(`[mutter] "${observable}" accessed by "${context.observer}"`); 
@@ -371,7 +376,12 @@ export function StoreProvider({ store, context = StoreContext, children }) {
 }
 
 // based on React.memo impl
-export function observerEquals(objA, objB) {
+// This won't work: 
+// observer({ todo } => todo.done)
+// change of `todo.done` notifies the component, but it reads from the old snapshot.
+// Maybe we could allow the snapshot to update internally to current copy? Memo would fail...
+// Observer can intercept props...could it replace them? would be slow...
+export function propsEquals(objA, objB) {
   if (Object.is(objA, objB)) {
     return true;
   }
@@ -398,7 +408,7 @@ export function observerEquals(objA, objB) {
     if (!objB.hasOwnProperty(currentKey)) {
       return false
     }
-    // The twist: if it's a observable copy of the same object it's considered equal
+    // The twist: if it's an observable copy of the same object it's considered equal
     const nodeA = getNode(objA[currentKey]);
     if (nodeA) {
       const nodeB = getNode(objB[currentKey]);
@@ -414,6 +424,13 @@ export function observerEquals(objA, objB) {
   return true;
 }
 
+const propsProxyHandler = {
+  get(target, key) {
+    const value = target[key];        
+    return getNode(value)?._copy ?? value;
+  }
+}
+
 // TODO rename `component` to `render`, explain to user it's not a component, verify there are no static props other then usual
 export function observer(component) {
   if (process.env.NODE_ENV !== 'production' && component instanceof Component) {
@@ -425,7 +442,7 @@ export function observer(component) {
   const context = getContext();
   if (context.ssr) return component;
 
-  function ObserverComponent(props, refOrCtx) {    
+  function ObserverComponent(props, refOrCtx) {
     // Optimization: 
     // since we don't need state, use that slot as ref
     const [inst, forceUpdate] = useState({ observer: null });
@@ -434,23 +451,32 @@ export function observer(component) {
       inst.observer = new Observer(() => forceUpdate({ observer: inst.observer }));
       // The observer will dispose itself later, unless disposal is cancelled by layout effect.
       // If layout effect runs, the component is surely mounted. 
-      // Layout effect is guaranteed to run synchronously - always before deferred disposer.
+      // Layout effect is guaranteed to run synchronously - always before deferred disposer.      
       inst.observer.scheduleDispose();
     }
 
     useLayoutEffect(() => {
       inst.observer.cancelDispose();
       return () => inst.observer.dispose();
-    }, []);
+    }, []);    
+
+    if (inst.observer.prevProps !== props) {
+      // TODO update version in beginReads
+      inst.observer.prevProps = props;
+      // In principle we could have a single proxy of empty object, that delegates to current props
+      // but it must implement all traps
+      // and we need a handler per observer - observer could implement trap methods and work as a proxy handler
+      inst.observer.propsProxy = new Proxy(props, propsProxyHandler)  
+    } 
 
     // Render
     const phase = context.phase;
     if (phase !== PHASE_READS) {
       beginReads();
-    }
+    }                     
     inst.observer.beginSubscriptions();
     try {
-      return component(props, refOrCtx);
+      return component(inst.observer.propsProxy, refOrCtx);
     } finally {
       inst.observer.endSubscriptions();
       if (phase === PHASE_IDLE) {
@@ -464,7 +490,7 @@ export function observer(component) {
     ObserverComponent.displayName = component.name;
   }
 
-  return memo(ObserverComponent, observerEquals);
+  return memo(ObserverComponent, propsEquals);
 }
 
 export function useObservableStore() {
@@ -489,12 +515,31 @@ export function useObservableStore() {
   return snapshot;
 }
 
-export function useObserverEffect() {
-
+// Basically useless, just better error
+// TODO delete and improve the accessed observable outside observer error
+export function useObserverEffect(effect, deps) {
+  if (__DEV__) {
+    if (!getContext().observer) {
+      throw new Error(`\`useObserverEffect\` can only be used in \`observer\``)
+    }    
+    if (deps) {
+      for (const dep of deps) {
+        if (getNode(dep)) {
+          throw new Error(`
+            Do not pass \`observables\` as hook dependencies.
+            Prefer passing primitive values, eg: \`[object]\` => \`[object.x]\`.
+            Or use eg: \`[unwrap(array)]\`
+            `
+          );
+        }
+      }
+    }  
+  }
+  return useEffect(effect, deps);
 }
 
 export function observe(fn) {
-  function effect(observer) {    
+  function effect(observer) {
     observer.beginSubscriptions()
     try {
       fn(observer)
@@ -502,7 +547,7 @@ export function observe(fn) {
       observer.endSubscriptions();
     }
   }
-  const observer = new Observer(effect);  
+  const observer = new Observer(effect);
   return observer;
 }
 
@@ -548,18 +593,6 @@ export class Store {
   }
   dispatch(fn) {
     dispatch(() => fn(this._root._proxy));
-    /*
-    // Perhpas move this logic to scheduleAction
-    if (getContext().observer) {
-      
-    } else {      
-      fn(this._root._proxy);    
-      // If possible, don't wait for microtask:
-      // it would cause issues in event handlers (eg setting input value).
-      // But at the same don't allow state mutations until observer finishes.
-      callScheduledObservers();
-    }
-    */
   }
 }
 
@@ -600,7 +633,7 @@ export const copyProxyHandler = {
     return Reflect.get(target, key, reciever);
   },
   ownKeys(target) {
-    const node = getNode(target);    
+    const node = getNode(target);
     const observable = getObservable(node, keysKey);
     reportAccess(observable)
     return Reflect.ownKeys(target);
@@ -626,8 +659,7 @@ export const stateProxyHandler = {
       const valueNode = new Node(store, value, key, node);
       target[key] = valueNode._proxy;
       copy[proxyTargetSymbol][key] = valueNode._copy;
-    } else {
-      // TODO throw, allow only refs
+    } else {      
       target[key] = value;
       copy[proxyTargetSymbol][key] = value;
     }
@@ -645,7 +677,8 @@ export const stateProxyHandler = {
     return true;
   },
   deleteProperty(target, key) {
-    const copy = getNode(target).getCopy();
+    const node = getNode(target);
+    const copy = node.getCopy();
     if (target.hasOwnProperty(key)) {
       // Nothing to report if key doesn't exists
       reportChange(getObservable(node, keysKey));

@@ -52,11 +52,13 @@ Be non-opinionated.<br>
 Best possible performance in every scenario.<br>
 
 ### Best practies
-
+TODO examples
+Reexport the library as your own module and depend on this module instead.
 Keep state flat, avoid nesting.<br>
 Provide everything a stable ID.<br>
-Prefer arrays of IDs rather than arrays of actual objects. TODO example<br>
-Refer to other objects via IDs. TODO example<br>
+Prefer arrays of IDs rather than arrays of actual objects.<br>
+Refer to other objects via IDs.<br>
+Don't pass objects/arrays that are part of the snapshot as params to actions, eg `deleteTodo(todo)` => `deleteTodo(id)`<br>
 
 ### Subscribing for a change in the subtree
 
@@ -152,3 +154,40 @@ d) in effect - collect accessed { node, key, value }, compare value with current
 
 TODO<br>
 Is not allowed. All state mutations happens synchronously and immediately, meaning that multiple observers invoked in the same batch could see different snapshots.
+
+### Additional notes 
+
+- use(Layout)Effect can't be observer, because it may access observables asynchronously
+- we have to decide between warning outside observer OR ability to read from snapshot during writes due to async operations OR enabling async only via dispatch(+generators)
+[unwrap(object)]
+- useObserverEffect
+- if we enable writes only in dispatch, then we can allow reading from snapshots during writes - so the access can still warn outside observer,eg:
+```javascript
+// Effect must unwrap
+// or can be observer
+const _todo = unwrap(todo);
+function onMount() {
+
+}
+useEffect(onMount());
+useEffect(onUpdate());
+useEffect(() => {
+  dispatch(deleteTodo(_todo.id))
+}, [_todo])
+
+useCallback(() => {
+  dispatch(addTodo(todo.id)) // throws observable access outside observer
+}, [todo])
+
+useAction(() => {
+  dispatch(addTodo) // writes allowed
+}, [todo])
+
+useAction(event => deleteTodo(todo.id), [todo]);
+
+const { id } = todo;
+useCallback(event => deleteTodo(id), [id])
+```
+
+
+Idea: when reading from snapshot, change node._version to some global version incremented after last endWrites NOPE version must by synced

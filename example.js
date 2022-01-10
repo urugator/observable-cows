@@ -1,64 +1,90 @@
 import { render } from 'react-dom';
-import { createElement as el } from 'react';
+import { createElement as el, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { createStore, getContext, observer, StoreProvider, useObservableStore } from './index.js';
 
-let id = 0;
+let globalId = 0;
+
+const useUpdateCounter = () => {
+  const countRef = useRef(0);
+  countRef.current++;  
+  return countRef.current;
+}
 
 const store = createStore({
-  todos: {},  
+  todos: {},
 });
 
 const addTodo = todo => state => {
   state.todos[todo.id] = todo;
 }
 
-const deleteTodo = todoId => state => {
-  console.log(state);
+const deleteTodo = todoId => state => {  
   delete state.todos[todoId];
 }
 
+const toggleTodoDone = todoId => state => {
+  state.todos[todoId].done = true;
+}
+
+const setTodoDone = ({ todoId, done }) => state => {
+  state.todos[todoId].done = done;
+  console.log('when set', state.todos[todoId].done);
+}
+
+function UpdateCounter() {
+  const countRef = useRef(0);
+  countRef.current++; 
+  return el('span', { className: 'updateCounter' }, countRef.current);
+}
+
 const Todo = observer(function Todo({ todo }) {  
-  const [,dispatch] = useObservableStore();
-  const { id, text } = todo;
-
-  const onDeleteTodoClick = event => {
-    // mutable(todo).id;
-    // when outside READS, we could delegate reads to state proxy to get the most up to date state
-    // but then we can't protect agains forgetting observer...
-    // perhpas we could have `useObserverCallback` that would disable the warning, but then its mandatory...
-    // we still need `useObserverCallback` because of the deps - the cool thing is we can just ignore observables in deps list, instead of unwraping them    
-    // note you stil cannot write when IDLE    
-    // note in react callbacks may be used also for reads, but that shouldn't matter ... when in reads the behavior doesn't change
-    // what about sending these to non-observers as render prop - it would fail and wouldnt warn...
-    // ok so `useWriteCallback`,`useRenderCallback`, `useRead`,`useView`,`useAction`, `useHandler/Listener`(to specific )
-    // `useAction` could dispatch returned value, eg: useAction(event => deleteTodo(id)) or `useDispatch()`
-    // `useEffect` still needs `dispatch`
+  const [,dispatch] = useObservableStore();  
+  const { id, text, done } = todo;  
+  
+  const onDeleteTodoClick = useCallback(event => {        
     dispatch(deleteTodo(id));
-  }
+    // Following would throw: "Observable `0.todos[todo.id].id` was accessed outside observer."
+    // dispatch(deleteTodo(todo.id));
+  }, [id])
 
-  return el('div', {}, 
-    id, ' ', text,
-    el('button', { type: 'button', onClick: onDeleteTodoClick }, 'Delete'),    
+  const onTodoDoneChange = useCallback(event => {    
+    dispatch(setTodoDone({ 
+      todoId: id, 
+      done: event.target.checked,
+    }));    
+  }, [id])
+
+  return el('li', {}, 
+    el('input', { type: 'checkbox', checked: done, onChange: onTodoDoneChange }),
+    el('span', {}, `${id} ${text}`, UpdateCounter()),    
+    el('button', { type: 'button', onClick: onDeleteTodoClick }, 'Delete'),   
   )
 })
 
 const TodoList = observer(function TodoList() {
-  const [state] = useObservableStore();
+  const [state] = useObservableStore();  
 
-  return Object.values(state.todos).map(todo => el(Todo, { key: todo.id, todo }));
+  return el('div', {}, 
+    el('h2', {}, `TodoList`, el(UpdateCounter)),
+    el('ul', {}, 
+      Object.values(state.todos).map(todo => el(Todo, { key: todo.id, todo })),
+    )    
+  );
 });
 
 const TodoApp = observer(function TodoApp() {  
-  const [,dispatch] = useObservableStore();
+  const [,dispatch] = useObservableStore();  
 
   const onAddTodoClick = event => {    
     const text = window.prompt('Text');
-    dispatch(addTodo({ id: id++, text }));
+    if (text === null) return;
+    dispatch(addTodo({ id: globalId++, text, done: false }));
   }
 
   return el('div', {},  
+    el('h1', {}, `TodoApp`, el(UpdateCounter)),
     el(TodoList),
-    el('button', { type: 'button', onClick: onAddTodoClick }, 'Add TODO'),
+    el('button', { type: 'button', onClick: onAddTodoClick }, 'Add new'),
   )
 });
 
