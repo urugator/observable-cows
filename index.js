@@ -35,6 +35,7 @@ globalThis[contextSymbol] = {
   // Map<observer, Set<observable>>  
   ssr: typeof window === 'undefined',
   requireObserver: true,
+  version: Symbol(),
 }
 
 // TODO
@@ -50,8 +51,39 @@ class Observer {
     this.effect = effect;
     // TODO Subclass - ComponentObserver
     this.disposeCallbackId = null;    
-    this.prevProps = null;
-    this.propsProxy = null;
+    //this.prevProps = null;
+    this.props = null;
+    // Hack: We can't proxy props directly,
+    // because it's frozen - `get` trap  can't return different value.
+    this.propsProxy = new Proxy({}, this);
+  }
+  get(target, key) {
+    const value = this.props[key];
+    return getNode(value)?._copy ?? value;
+  }
+  has(target, key) {
+    return Reflect.has(this.props, key);
+  }
+  ownKeys() {
+    return Reflect.ownKeys(this.props);
+  }
+  getOwnPropertyDescriptor(target, key) {
+    return Reflect.getOwnPropertyDescriptor(this.props, key);
+  }
+  getPrototypeOf(target) {
+    return Reflect.getPrototypeOf(this.props);
+  }
+  set(target, key) {
+    return Reflect.set(this.props, key);
+  }
+  defineProperty(target, key, descriptor) {
+    return Reflect.defineProperty(target, key);
+  }
+  isExtensible(target) {
+    return Reflect.isExtensible(target);
+  }
+  prevetExtensions(target) {
+    return Reflect.preventExtensions(target);
   }
   scheduleDispose() {
     this.disposeCallbackId = requestIdleCallback(() => this.dispose());
@@ -201,6 +233,7 @@ export function beginReads() {
     throw new Error("Can't begin reads when not idle.");
   }
   context.phase = PHASE_READS;
+  context.version = Symbol();
 }
 
 export function endReads() {
@@ -460,13 +493,8 @@ export function observer(component) {
       return () => inst.observer.dispose();
     }, []);    
 
-    if (inst.observer.prevProps !== props) {
-      // TODO update version in beginReads
-      inst.observer.prevProps = props;
-      // In principle we could have a single proxy of empty object, that delegates to current props
-      // but it must implement all traps
-      // and we need a handler per observer - observer could implement trap methods and work as a proxy handler
-      inst.observer.propsProxy = new Proxy(props, propsProxyHandler)  
+    if (inst.observer.props !== props) {      
+      inst.observer.props = props;  
     } 
 
     // Render
@@ -698,7 +726,8 @@ export class Node {
     })
     this._store = store;
     this._target = target;
-    this._version = store._version;
+    //this._version = store._version;
+    this._version = getContext().version;
     this._parent = parent;
     this._key = key;
     this._path = parent ? `${parent._path}.${key}` : key;
@@ -713,7 +742,8 @@ export class Node {
     }
   }
   getCopy() {
-    if (this._version !== this._store._version) {
+    const globalVersion = getContext().version;
+    if (this._version !== globalVersion) {
       // Create copy if version diverges
       //console.log(`copy ${this._path.join('.')} ${JSON.stringify(this._copy)}`)
       // Schedule store listeners
@@ -728,7 +758,7 @@ export class Node {
       this._copy = new Proxy(this._copy, copyProxyHandler);
 
       // update version
-      this._version = this._store._version;
+      this._version = globalVersion;
       // propagate 
       if (this._parent) {
         // Assign directly to target instead of proxy:

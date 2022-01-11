@@ -161,33 +161,18 @@ Is not allowed. All state mutations happens synchronously and immediately, meani
 - we have to decide between warning outside observer OR ability to read from snapshot during writes due to async operations OR enabling async only via dispatch(+generators)
 [unwrap(object)]
 - useObserverEffect
-- if we enable writes only in dispatch, then we can allow reading from snapshots during writes - so the access can still warn outside observer,eg:
+- if we enable writes only in dispatch, then we can allow reading from snapshots during writes - so the access can still warn outside observer,but then:
+
 ```javascript
-// Effect must unwrap
-// or can be observer
-const _todo = unwrap(todo);
-function onMount() {
-
-}
-useEffect(onMount());
-useEffect(onUpdate());
-useEffect(() => {
-  dispatch(deleteTodo(_todo.id))
-}, [_todo])
-
+// still throws
 useCallback(() => {
-  dispatch(addTodo(todo.id)) // throws observable access outside observer
+  dispatch(deleteTodo(todo.id))
 }, [todo])
-
-useAction(() => {
-  dispatch(addTodo) // writes allowed
-}, [todo])
-
-useAction(event => deleteTodo(todo.id), [todo]);
-
-const { id } = todo;
-useCallback(event => deleteTodo(id), [id])
+// so it would have to be
+useCallback(() => {
+  dispatch(deleteTodo(todo))
+}, [todo]) 
+// which:
+// needs custom comparator that unwraps
+// is non-idiomatic
 ```
-
-
-Idea: when reading from snapshot, change node._version to some global version incremented after last endWrites NOPE version must by synced

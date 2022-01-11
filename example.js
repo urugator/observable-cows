@@ -40,6 +40,14 @@ function UpdateCounter() {
 const Todo = observer(function Todo({ todo }) {  
   const [,dispatch] = useObservableStore();  
   const { id, text, done } = todo;  
+
+  for (const key in todo) {
+    console.log(key);
+  }
+  console.log("id in todo", "id" in todo);
+  console.log("____ in todo", "____" in todo);
+  console.log(Object.getOwnPropertyDescriptor(todo, "id"));
+  console.log(Object.getOwnPropertyDescriptor(todo, "____"));
   
   const onDeleteTodoClick = useCallback(event => {        
     dispatch(deleteTodo(id));
