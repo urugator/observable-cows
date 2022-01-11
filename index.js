@@ -408,12 +408,6 @@ export function StoreProvider({ store, context = StoreContext, children }) {
   return createElement(context.Provider, { value }, children);
 }
 
-// based on React.memo impl
-// This won't work: 
-// observer({ todo } => todo.done)
-// change of `todo.done` notifies the component, but it reads from the old snapshot.
-// Maybe we could allow the snapshot to update internally to current copy? Memo would fail...
-// Observer can intercept props...could it replace them? would be slow...
 export function propsEquals(objA, objB) {
   if (Object.is(objA, objB)) {
     return true;
@@ -448,8 +442,7 @@ export function propsEquals(objA, objB) {
       if (!nodeB || !Object.is(nodeA._proxy, nodeB._proxy)) {
         return false;
       }
-    }
-    if (!Object.is(objA[currentKey], objB[currentKey])) {
+    } else if (!Object.is(objA[currentKey], objB[currentKey])) {
       return false;
     }
   }
