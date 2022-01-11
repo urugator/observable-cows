@@ -157,11 +157,11 @@ Is not allowed. All state mutations happens synchronously and immediately, meani
 
 ### Additional notes 
 
-- use(Layout)Effect can't be observer, because it may access observables asynchronously
+- use(Layout)Effect can't be observer, because it may access observables asynchronously, so it wouldn't subscribe for these
 - we have to decide between warning outside observer OR ability to read from snapshot during writes due to async operations OR enabling async only via dispatch(+generators)
 [unwrap(object)]
 - useObserverEffect
-- if we enable writes only in dispatch, then we can allow reading from snapshots during writes - so the access can still warn outside observer,but then:
+- if we enable writes only in dispatch, then we can allow reading from snapshots during writes - so the access can still warn outside observer, but then:
 
 ```javascript
 // still throws
@@ -173,8 +173,40 @@ useCallback(() => {
   dispatch(deleteTodo(todo))
 }, [todo])
 // which is non-idiomatic
-// and we need a custom deps comparator that unwraps
-useEffect(() => {
-  dispatch(deleteTodo(todo))
-}, [todo])
+// and we need a custom deps comparator that unwraps observables
+```
+
+### Passing observables as props
+
+The observer component is able to invalidate itself, but the observable prop is the one passed by parent, not the current one. Possible solutions:
+
+**Don't allow passing observables as props to observers**<br>
+Implemented as devel only check throwing an error.<br>
+You can only pass ID and select the actual value in child component based on it.<br>
+Idiomatic, but less convinient. If the selected value doesn't exist we can't bail out (similar to context selectors)<br>
+
+**Replace props**<br>
+If props did not changed (meaning the component was not updated by parent). Cycle through current props and replace the observable one with current copy.<br>
+Additional overhead, even if there are no observables.<br>
+
+**Proxify props**<br>
+The `get` trap checks if prop is oservable and returns latest copy rather than actual prop<br>
+Dunno if safe - props can be read outside render (eg effect) so it could see different copy than render.
+But not sure if it can actually happen - my assumtion is that if the copy changed, then there is scheduled update and react will wait for that update before actually invoking effect. Same situation can occur with vanilla react `setState` + mutable state.<br>
+Also the proxy could be eventually slower then replacing props.
+
+**Use mutable state**
+The refs are stable. Use "copy" only on devel to protect from reads/writes. Use "copy" propagation to allow deep subscriptions.<br>
+All hooks (including memo) require unwrap.
+
+**Give up on `observer` idea, use observing selectors**
+We would always uwrap returned value, but then user must return observable or primitive, he can't create new object:
+```javascript
+const thing = useSelector(state => {
+  // problematic
+  return {
+    a: state.x.a
+    b: state.y.b
+  }
+})
 ```

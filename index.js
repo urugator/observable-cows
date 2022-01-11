@@ -51,13 +51,16 @@ class Observer {
     this.effect = effect;
     // TODO Subclass - ComponentObserver
     this.disposeCallbackId = null;    
-    //this.prevProps = null;
     this.props = null;
     // Hack: We can't proxy props directly,
-    // because it's frozen - `get` trap  can't return different value.
+    // because it's frozen - `get` trap  can't return different value.    
     this.propsProxy = new Proxy({}, this);
   }
   get(target, key) {
+    // This could be a bit dangerous if
+    // react would decide to re-run effects or memo without re-running render
+    // because the copy could be different then the one used for render
+    // leading to inconsistencies
     const value = this.props[key];
     return getNode(value)?._copy ?? value;
   }
@@ -450,13 +453,16 @@ export function propsEquals(objA, objB) {
   return true;
 }
 
-const propsProxyHandler = {
-  get(target, key) {
-    const value = target[key];        
-    return getNode(value)?._copy ?? value;
+function ObserverMemo(component) {
+  // Idea merge memo and props replacement logic
+  // we would pass observer via props and use it in child
+  // the child would be invalidated on props change or on state change
+  return function ObserverMemo(props, refOrCtx) {
+    const prevProps = useRef();
+    
+    return el(component, props);
   }
 }
-
 // TODO rename `component` to `render`, explain to user it's not a component, verify there are no static props other then usual
 export function observer(component) {
   if (process.env.NODE_ENV !== 'production' && component instanceof Component) {
@@ -467,7 +473,7 @@ export function observer(component) {
   }
   const context = getContext();
   if (context.ssr) return component;
-
+  // We can proxify function call...
   function ObserverComponent(props, refOrCtx) {
     // Optimization: 
     // since we don't need state, use that slot as ref
@@ -517,7 +523,7 @@ export function observer(component) {
 export function useObservableStore() {
   const context = getContext();
   const { observer } = context;
-  if (!observer) {
+  if (__DEV__ && !observer) {
     throw new Error(`\`useObservableStore\` can only be used in \`observer\``)
   }
   const store = useContext(StoreContext);
