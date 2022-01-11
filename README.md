@@ -1,6 +1,6 @@
 # observable-cows
 
-A state management I can live with.
+A global state management library for react.
 
 ## Requirements
 TODO<br>
@@ -171,8 +171,10 @@ useCallback(() => {
 // so it would have to be
 useCallback(() => {
   dispatch(deleteTodo(todo))
-}, [todo]) 
-// which:
-// needs custom comparator that unwraps
-// is non-idiomatic
+}, [todo])
+// which is non-idiomatic
+// and we need a custom deps comparator that unwraps
+useEffect(() => {
+  dispatch(deleteTodo(todo))
+}, [todo])
 ```
